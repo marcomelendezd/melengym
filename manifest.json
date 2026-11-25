@@ -1,6 +1,6 @@
 {
-  "name": "MELENGYM",
-  "short_name": "MELENGYM",
+  "name": "Melengym",
+  "short_name": "Melengym",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
