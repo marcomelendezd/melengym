@@ -140,6 +140,7 @@ select{background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.o
   padding:6px 2px;border-radius:8px;white-space:nowrap}
 .setgrid button.prev:active{background:var(--surface2)}
 .setgrid .prev.nada{color:var(--faint);font-weight:500}
+.setgrid.cardio{grid-template-columns:26px 1fr 1fr 56px 44px}
 .setgrid input::placeholder{color:#5c636d;font-weight:650;opacity:1}
 .setgrid input::-webkit-input-placeholder{color:#5c636d;font-weight:650}
 .ck{width:40px;height:40px;border-radius:10px;border:1px solid var(--line);background:var(--surface2);
@@ -600,20 +601,42 @@ async function hydrateLocalImages(){
 
 /* ============================ cálculos ============================ */
 const e1rm=(w,r)=> (!w||!r)?0 : (r===1? w : w*(1+r/30));   // Epley
+function resumenEntreno(st){
+  const p=[];
+  if(st.sets) p.push(st.sets+" series · "+fNum(st.vol)+" kg");
+  if(st.cardio) p.push(fMin(st.min)+(st.km?" · "+fNum(st.km,2)+" km":""));
+  return p.join("  ·  ")||"sin registros";
+}
 function workoutStats(w){
-  let vol=0,sets=0,reps=0;
-  for(const en of (w.entries||[])) for(const s of (en.sets||[])){
-    if(!s.done||s.warm)continue; sets++; reps+=(+s.r||0); vol+=(+s.w||0)*(+s.r||0);
+  let vol=0,sets=0,reps=0,min=0,km=0,cardio=0;
+  for(const en of (w.entries||[])){
+    if(esCardio(getDoc(en.exerciseId))){
+      for(const s of (en.sets||[])){ if(!s.done)continue; cardio++; min+=+s.t||0; km+=+s.d||0; }
+      continue;
+    }
+    for(const s of (en.sets||[])){
+      if(!s.done||s.warm)continue; sets++; reps+=(+s.r||0); vol+=(+s.w||0)*(+s.r||0);
+    }
   }
-  return {vol,sets,reps,dur:(w.endedAt&&w.startedAt)?(w.endedAt-w.startedAt-(w.pausedMs||0)):0};
+  return {vol,sets,reps,min,km,cardio,
+    dur:(w.endedAt&&w.startedAt)?(w.endedAt-w.startedAt-(w.pausedMs||0)):0};
 }
 function exHistory(exId,variant){
   const out=[];
+  const card=esCardio(getDoc(exId));
   for(const w of allOf("workout")){
     if(w.status==="active")continue;
     for(const en of (w.entries||[])){
       if(en.exerciseId!==exId)continue;
       if(variant&&(en.variant||"")!==variant)continue;
+      if(card){
+        let min=0,km=0,n=0,lvl=0;
+        for(const s of en.sets||[]){ if(!s.done)continue; n++;
+          min+=+s.t||0; km+=+s.d||0; if(+s.lvl>lvl)lvl=+s.lvl; }
+        if(n) out.push({date:w.date,min,km,lvl,ritmo:ritmoDe(min,km),sets:n,
+          bestW:0,best1rm:0,vol:0,workoutId:w.id,variant:en.variant||""});
+        continue;
+      }
       let bw=0,b1=0,vol=0,n=0;
       for(const s of en.sets||[]){ if(!s.done||s.warm)continue; n++;
         const ww=+s.w||0, rr=+s.r||0; vol+=ww*rr;
@@ -658,6 +681,7 @@ function rangoObjetivo(txt){
   return n?[+n[1],+n[1]]:null;
 }
 function sugerencia(exId,variant,objetivo){
+  if(esCardio(getDoc(exId))) return null;
   const ses=sesiones(exId,variant);
   if(!ses.length) return null;
   const ex=getDoc(exId);
@@ -680,9 +704,25 @@ function sugerencia(exId,variant,objetivo){
   }
   return {w:base,r:minReps+1,por:"consolida el peso antes de subir"};
 }
-function prFor(exId,variant){ const h=exHistory(exId,variant); let w=0,o=0;
-  for(const x of h){ if(x.bestW>w)w=x.bestW; if(x.best1rm>o)o=x.best1rm; } return {w,o}; }
+function prFor(exId,variant){
+  const h=exHistory(exId,variant);
+  if(esCardio(getDoc(exId))){
+    let km=0,min=0,rt=0;
+    for(const x of h){ if(x.km>km)km=x.km; if(x.min>min)min=x.min;
+      if(x.ritmo>0&&(rt===0||x.ritmo<rt))rt=x.ritmo; }
+    return {w:0,o:0,km,min,ritmo:rt};
+  }
+  let w=0,o=0;
+  for(const x of h){ if(x.bestW>w)w=x.bestW; if(x.best1rm>o)o=x.best1rm; }
+  return {w,o,km:0,min:0,ritmo:0}; }
 function varsOf(e){ return (e&&Array.isArray(e.variants))?e.variants.filter(Boolean):[]; }
+function esCardio(ex){ return !!(ex&&ex.kind==="cardio"); }
+function ritmoDe(min,km){ return (min>0&&km>0)? min/km : 0; }
+function fRitmo(r){ if(!r||!isFinite(r)||r<=0)return "—";
+  const m=Math.floor(r), sg=Math.round((r-m)*60);
+  return (sg===60? (m+1)+":00" : m+":"+String(sg).padStart(2,"0"))+" /km"; }
+function fMin(m){ if(!m)return "—"; if(m<60)return fNum(m,0)+" min";
+  return Math.floor(m/60)+"h "+String(Math.round(m%60)).padStart(2,"0"); }
 function profile(){ return getDoc("profile")||{id:"profile",type:"profile",name:"",altura:"",peso:"",face:"💪"}; }
 function activeWorkout(){ return allOf("workout").find(w=>w.status==="active")||null; }
 function exName(id){ const e=getDoc(id); return e?e.name:"Ejercicio"; }
@@ -861,8 +901,9 @@ function newWorkout(routine){
     name:routine?routine.name:"Entreno libre",routineId:routine?routine.id:null,
     startedAt:Date.now(),endedAt:null,notes:"",entries:[]};
   if(routine) for(const it of routine.items||[]){
-    const sets=[]; const n=Math.max(1,+it.sets||3);
-    for(let i=0;i<n;i++) sets.push({w:"",r:"",done:false});
+    const card=esCardio(getDoc(it.exerciseId));
+    const sets=[]; const n=card?1:Math.max(1,+it.sets||3);
+    for(let i=0;i<n;i++) sets.push(card?{t:"",d:"",lvl:"",done:false}:{w:"",r:"",done:false});
     w.entries.push({exerciseId:it.exerciseId,variant:it.variant||"",sets,
       target:it.reps||"",note:it.note||""});
   }
@@ -870,7 +911,7 @@ function newWorkout(routine){
 }
 function finishWorkout(w){
   const st=workoutStats(w);
-  if(st.sets===0){ confirmSheet("Entreno vacío","No has marcado ninguna serie. ¿Descartarlo?",
+  if(st.sets===0&&!st.cardio){ confirmSheet("Entreno vacío","No has marcado ninguna serie. ¿Descartarlo?",
     ()=>{removeDoc(w.id);toast("Entreno descartado");},"Descartar"); return; }
   w.entries=(w.entries||[]).map(en=>({...en,sets:(en.sets||[]).filter(s=>s.done)}))
                            .filter(en=>en.sets.length);
@@ -1074,13 +1115,13 @@ function viewTrain(v){
       v.appendChild(el("div",{class:"sec-title",text:"Último entreno"}));
       v.appendChild(el("button",{class:"item",onclick:()=>push({v:"workout",id:last.id})},
         el("div",{class:"grow"},el("div",{class:"b ellip",text:last.name}),
-          el("div",{class:"sm faint",text:fDate(last.date,true)+" · "+st.sets+" series · "+fNum(st.vol)+" kg"})),
+          el("div",{class:"sm faint",text:fDate(last.date,true)+" · "+resumenEntreno(st)})),
         svgI(ICO.chev)));
     }
     return;
   }
   const st=workoutStats(w);
-  head(w.name,fDate(w.date,true)+" · "+st.sets+" series · "+fNum(st.vol)+" kg");
+  head(w.name,fDate(w.date,true)+" · "+resumenEntreno(st));
   v.appendChild(el("div",{class:"clockcard"},
     el("div",{class:"grow"},
       el("div",{class:"big num",id:"wclock",text:fClock(elapsed(w))}),
@@ -1098,7 +1139,8 @@ function viewTrain(v){
   v.appendChild(el("button",{class:"btn full big",style:"margin-top:4px",
     onclick:()=>pickExercise(ids=>{
       for(const id of ids){ const e=getDoc(id); const vs=varsOf(e);
-        w.entries.push({exerciseId:id,variant:vs.length?vs[0]:"",sets:[{w:"",r:"",done:false}],note:""}); }
+        w.entries.push({exerciseId:id,variant:vs.length?vs[0]:"",
+          sets:[esCardio(e)?{t:"",d:"",lvl:"",done:false}:{w:"",r:"",done:false}],note:""}); }
       put(w);
     })},svgI(ICO.plus),"Añadir ejercicio"));
 }
@@ -1216,6 +1258,7 @@ function sheetWorkoutOpts(w){
 
 function exerciseBlock(w,en,ei){
   const ex=getDoc(en.exerciseId);
+  if(esCardio(ex)) return cardioBlock(w,en,ei,ex);
   const vs=varsOf(ex);
   const prev=lastEntryFor(en.exerciseId,en.variant,w.id);
   const pr=prFor(en.exerciseId,en.variant);
@@ -1285,6 +1328,62 @@ function exerciseBlock(w,en,ei){
     (en.sets||[]).length>1?el("button",{class:"btn sm",onclick:()=>{en.sets.pop();put(w);}},"Quitar"):null));
   return box;
 }
+function cardioBlock(w,en,ei,ex){
+  const vs=varsOf(ex);
+  const prev=lastEntryFor(en.exerciseId,en.variant,w.id);
+  const pr=prFor(en.exerciseId,en.variant);
+  const box=el("div",{class:"ex-block"});
+  let pmin=0,pkm=0;
+  if(prev) for(const s of prev.sets){ pmin+=+s.t||0; pkm+=+s.d||0; }
+  const partes=[];
+  partes.push(prev? fDate(prev.date)+": "+fMin(pmin)+(pkm?" · "+fNum(pkm,2)+" km":"")
+                    +(ritmoDe(pmin,pkm)?" · "+fRitmo(ritmoDe(pmin,pkm)):"")
+                  : "Primera vez que lo haces");
+  if(pr.km) partes.push("mejor "+fNum(pr.km,2)+" km");
+  if(pr.ritmo) partes.push("ritmo "+fRitmo(pr.ritmo));
+  const sub=el("div",{class:"xs",style:"color:var(--muted)",text:partes.join("   ·   ")});
+  const titulo=el("div",{class:"grow"},el("div",{class:"nm ellip",text:ex.name}),sub);
+  if(vs.length) titulo.insertBefore(el("div",{style:"margin:3px 0 4px"},
+      el("button",{class:"varchip"+(en.variant?" set":""),onclick:()=>pickVariant(ex,en.variant,val=>{
+        en.variant=val; put(w);
+      })},en.variant||"Elegir variante"," ▾")),sub);
+  box.appendChild(el("div",{class:"ex-head"},titulo,
+    el("button",{class:"iconbtn",onclick:()=>sheetExOpts(w,en,ei)},svgI(ICO.gear))));
+  box.appendChild(el("div",{class:"setgrid cardio head"},
+    el("div",{class:"idx",text:"#"}),
+    el("div",{class:"center",text:"min"}),
+    el("div",{class:"center",text:"km"}),
+    el("div",{class:"center",text:"nivel"}),el("div")));
+  (en.sets||[]).forEach((s,si)=>{
+    const p=prev&&prev.sets[si];
+    const ti=el("input",{type:"text",inputmode:"decimal",value:s.t||"",placeholder:p?String(p.t||""):"—",
+      oninput:e=>{s.t=e.target.value.replace(",",".");put(w,{silent:true,debounce:true});}});
+    const di=el("input",{type:"text",inputmode:"decimal",value:s.d||"",placeholder:p?String(p.d||""):"—",
+      oninput:e=>{s.d=e.target.value.replace(",",".");put(w,{silent:true,debounce:true});}});
+    const li=el("input",{type:"text",inputmode:"decimal",value:s.lvl||"",placeholder:p?String(p.lvl||""):"—",
+      oninput:e=>{s.lvl=e.target.value.replace(",",".");put(w,{silent:true,debounce:true});}});
+    const ck=el("button",{class:"ck"+(s.done?" on":""),onclick:()=>{
+      s.done=!s.done;
+      if(s.done){
+        if(!s.t) s.t=ti.value||(p?p.t:"");
+        if(!s.d) s.d=di.value||(p?p.d:"");
+        if(!s.lvl) s.lvl=li.value||(p?p.lvl:"");
+      }
+      put(w);
+    }},svgI(ICO.check));
+    box.appendChild(el("div",{class:"setgrid cardio"+(s.done?" row-done":"")},
+      el("div",{class:"idx",text:String(si+1)}),ti,di,li,ck));
+    const rt=ritmoDe(+s.t||0,+s.d||0);
+    if(rt) box.appendChild(el("div",{class:"xs faint center",style:"margin:-4px 0 6px",
+      text:"ritmo "+fRitmo(rt)}));
+  });
+  box.appendChild(el("div",{class:"ex-foot"},
+    el("button",{class:"btn sm grow",onclick:()=>{
+      en.sets.push({t:"",d:"",lvl:"",done:false}); put(w);
+    }},svgI(ICO.plus),"Otra serie"),
+    (en.sets||[]).length>1?el("button",{class:"btn sm",onclick:()=>{en.sets.pop();put(w);}},"Quitar"):null));
+  return box;
+}
 function pickVariant(ex,actual,cb){
   const vs=varsOf(ex);
   sheet("Variante de "+(ex?ex.name:"ejercicio"),(b,close)=>{
@@ -1330,8 +1429,9 @@ function sheetExOpts(w,en,ei){
 "use strict";
 /* ============================ EJERCICIOS ============================ */
 const MUSC=["Pecho","Espalda","Pierna","Hombro","Bíceps","Tríceps","Core","Glúteo","Cardio","Otro"];
-function createExercise(name,muscle,variants){
-  const e={id:"ex_"+uid8(),type:"exercise",name:name.trim(),muscle:muscle||"Otro",notes:"",
+function createExercise(name,muscle,variants,kind){
+  const e={id:"ex_"+uid8(),type:"exercise",name:name.trim(),
+    muscle:(kind==="cardio"?"Cardio":(muscle||"Otro")),notes:"",kind:kind||"fuerza",
     variants:(variants||"").split(",").map(x=>x.trim()).filter(Boolean)};
   put(e); return e;
 }
@@ -1340,12 +1440,26 @@ function sheetNewExercise(cb){
     const nm=el("input",{type:"text",placeholder:"Ej: Press plano"});
     const sel=el("select",null,...MUSC.map(m=>el("option",{value:m,text:m})));
     const vr=el("input",{type:"text",placeholder:"Multipower, Barra, Mancuernas"});
+    let kind="fuerza";
+    const grupo=el("label",{class:"fld"},el("span",{text:"Grupo muscular"}),sel);
+    const tipos=el("div",{class:"row",style:"gap:8px;margin-bottom:12px"});
+    const pintaTipos=()=>{ tipos.textContent="";
+      for(const k of [["fuerza","Fuerza"],["cardio","Cardio"]])
+        tipos.appendChild(el("button",{class:"chip grow"+(kind===k[0]?" on":""),
+          style:"justify-content:center;padding:12px",
+          onclick:()=>{ kind=k[0]; grupo.style.display=(kind==="cardio"?"none":"block");
+            vr.placeholder=(kind==="cardio"?"Cinta, Elíptica, Bici":"Multipower, Barra, Mancuernas");
+            pintaTipos(); }},k[1]));
+    };
+    pintaTipos();
     b.appendChild(el("label",{class:"fld"},el("span",{text:"Nombre"}),nm));
-    b.appendChild(el("label",{class:"fld"},el("span",{text:"Grupo muscular"}),sel));
+    b.appendChild(el("div",{class:"fld"},el("span",{class:"xs b",
+      style:"display:block;color:var(--muted);margin-bottom:6px",text:"TIPO"}),tipos));
+    b.appendChild(grupo);
     b.appendChild(el("label",{class:"fld"},el("span",{text:"Variantes (separadas por comas, opcional)"}),vr));
     b.appendChild(el("button",{class:"btn primary full big",onclick:()=>{
       if(!nm.value.trim()){toast("Ponle un nombre");return;}
-      const e=createExercise(nm.value,sel.value,vr.value); close(); if(cb)cb(e);
+      const e=createExercise(nm.value,sel.value,vr.value,kind); close(); if(cb)cb(e);
     }},"Crear"));
     setTimeout(()=>nm.focus(),250);
   });
@@ -1401,7 +1515,10 @@ function viewExercises(v){
     const h=exHistory(e.id); const pr=prFor(e.id); const vs=varsOf(e);
     v.appendChild(el("button",{class:"item",onclick:()=>push({v:"exercise",id:e.id})},
       el("div",{class:"grow"},el("div",{class:"b ellip",text:e.name}),
-        el("div",{class:"sm faint ellip",text:(vs.length?vs.join(" · ")+" — ":"")+(h.length?h.length+" sesiones · PR "+fNum(pr.w)+" kg":"sin registros")})),
+        el("div",{class:"sm faint ellip",text:(vs.length?vs.join(" · ")+" — ":"")+(
+          !h.length? "sin registros"
+          : esCardio(e)? h.length+" sesiones · mejor "+fNum(pr.km,2)+" km"
+          : h.length+" sesiones · PR "+fNum(pr.w)+" kg")})),
       svgI(ICO.chev)));
   }
 }
@@ -1421,6 +1538,27 @@ function viewExercise(v,top){
       onclick:()=>{top.variant=vv;render();}},vv));
     v.appendChild(chips);
   }
+  const card=esCardio(e);
+  if(card){
+    const totKm=h.reduce((a,x)=>a+x.km,0), totMin=h.reduce((a,x)=>a+x.min,0);
+    v.appendChild(el("div",{class:"stats",style:"margin-bottom:14px"},
+      stat(fNum(pr.km,2)+" km","Mejor sesión"),
+      stat(fRitmo(pr.ritmo).replace(" /km",""),"Mejor ritmo"),
+      stat(String(h.length),"Sesiones")));
+    v.appendChild(el("div",{class:"stats",style:"margin-bottom:14px"},
+      stat(fNum(totKm,1)+" km","Total"),
+      stat(fMin(totMin),"Tiempo total"),
+      stat(h.length?fNum(totKm/h.length,2)+" km":"—","Media")));
+    const conRitmo=h.filter(x=>x.ritmo>0);
+    if(h.length>1){
+      v.appendChild(el("div",{class:"sec-title",text:"Distancia por sesión"}));
+      v.appendChild(el("div",{class:"card"},barChart(h.slice(-12).map(x=>({x:x.date,y:x.km})),"km")));
+    }
+    if(conRitmo.length>1){
+      v.appendChild(el("div",{class:"sec-title",text:"Ritmo (min por km, menos es mejor)"}));
+      v.appendChild(el("div",{class:"card"},lineChart(conRitmo.map(x=>({x:x.date,y:x.ritmo})),"min")));
+    }
+  } else {
   v.appendChild(el("div",{class:"stats",style:"margin-bottom:14px"},
     stat(fNum(pr.w)+" kg","Peso máx"),
     stat(fNum(pr.o,1)+" kg","1RM est."),
@@ -1431,13 +1569,16 @@ function viewExercise(v,top){
     v.appendChild(el("div",{class:"sec-title",text:"Volumen por sesión"}));
     v.appendChild(el("div",{class:"card"},barChart(h.slice(-12).map(x=>({x:x.date,y:x.vol})),"kg")));
   }
+  }
   v.appendChild(el("div",{class:"sec-title",text:"Historial"}));
   if(!h.length) v.appendChild(el("p",{class:"sm faint center",style:"padding:14px",text:"Aún no lo has entrenado."}));
   for(const x of [...h].reverse()){
     v.appendChild(el("button",{class:"item",onclick:()=>push({v:"workout",id:x.workoutId})},
       el("div",{class:"grow"},el("div",{class:"b",text:fDate(x.date,true)+(x.variant&&!sel?" · "+x.variant:"")}),
-        el("div",{class:"sm faint",text:x.sets+" series · "+fNum(x.vol)+" kg · máx "+fNum(x.bestW)+" kg"})),
-      x.bestW>=pr.w&&pr.w>0?el("span",{class:"pill pr",text:"PR"}):null));
+        el("div",{class:"sm faint",text: card
+          ? fMin(x.min)+(x.km?" · "+fNum(x.km,2)+" km":"")+(x.ritmo?" · "+fRitmo(x.ritmo):"")
+          : x.sets+" series · "+fNum(x.vol)+" kg · máx "+fNum(x.bestW)+" kg"})),
+      (card? (x.km>0&&x.km>=pr.km) : (x.bestW>=pr.w&&pr.w>0))?el("span",{class:"pill pr",text:"PR"}):null));
   }
   v.appendChild(el("div",{style:"margin-top:18px"},
     el("button",{class:"btn full",style:"margin-bottom:9px",onclick:()=>sheet("Editar ejercicio",(b,close)=>{
@@ -1449,7 +1590,10 @@ function viewExercise(v,top){
       b.appendChild(el("label",{class:"fld"},el("span",{text:"Nombre"}),nm));
       b.appendChild(el("label",{class:"fld"},el("span",{text:"Grupo muscular"}),sl));
       b.appendChild(el("label",{class:"fld"},el("span",{text:"Variantes (separadas por comas)"}),vr));
-      b.appendChild(el("label",{class:"fld"},el("span",{text:"Salto de peso al progresar (kg)"}),ic));
+      if(!card) b.appendChild(el("label",{class:"fld"},el("span",{text:"Salto de peso al progresar (kg)"}),ic));
+      b.appendChild(el("p",{class:"xs faint",style:"margin:-4px 0 12px",
+        text:card?"Ejercicio de cardio: se registra en minutos, kilómetros y nivel."
+                 :"Ejercicio de fuerza: se registra en kilos y repeticiones."}));
       b.appendChild(el("button",{class:"btn primary full big",onclick:()=>{
         e.name=nm.value.trim()||e.name; e.muscle=sl.value;
         e.variants=vr.value.split(",").map(x=>x.trim()).filter(Boolean);
@@ -1638,7 +1782,7 @@ function viewHistory(v){
     v.appendChild(el("button",{class:"item",onclick:()=>push({v:"workout",id:w.id})},
       el("div",{class:"av"},el("span",{text:w.date.slice(8,10)})),
       el("div",{class:"grow"},el("div",{class:"b ellip",text:w.name}),
-        el("div",{class:"sm faint",text:st.sets+" series · "+fNum(st.vol)+" kg"+(st.dur?" · "+fDur(st.dur):"")})),
+        el("div",{class:"sm faint",text:resumenEntreno(st)+(st.dur?"  ·  "+fDur(st.dur):"")})),
       svgI(ICO.chev)));
   }
 }
@@ -1659,7 +1803,11 @@ function viewWorkoutDetail(v,top){
   head(w.name,fDate(w.date,true));
   v.appendChild(backBar());
   v.appendChild(el("div",{class:"stats",style:"margin-bottom:14px"},
-    stat(fNum(st.vol),"kg volumen"),stat(String(st.sets),"series"),stat(fDur(st.dur),"duración")));
+    st.cardio&&!st.sets? stat(fNum(st.km,2),"km") : stat(fNum(st.vol),"kg volumen"),
+    st.cardio&&!st.sets? stat(fMin(st.min),"cardio") : stat(String(st.sets),"series"),
+    stat(fDur(st.dur),"duración")));
+  if(st.cardio&&st.sets) v.appendChild(el("div",{class:"card tight sm muted",
+    text:"Cardio: "+fMin(st.min)+(st.km?" · "+fNum(st.km,2)+" km":"")}));
   if(w.notes) v.appendChild(el("div",{class:"card sm muted",text:w.notes}));
   for(const en of (w.entries||[])){
     const pr=prFor(en.exerciseId,en.variant);
@@ -1670,11 +1818,17 @@ function viewWorkoutDetail(v,top){
           el("div",{class:"nm ellip",text:exName(en.exerciseId)}),
           el("div",{class:"xs faint",text:[en.variant,en.note].filter(Boolean).join(" · ")})),
         svgI(ICO.chev)),
-      ...(en.sets||[]).map((s,i)=>el("div",{class:"setgrid",style:"grid-template-columns:28px 1fr 1fr 44px"},
-        el("div",{class:"idx"+(s.warm?" warm":""),text:s.warm?"C":String((en.sets||[]).slice(0,i+1).filter(x=>!x.warm).length)}),
-        el("div",{class:"center b num",text:fNum(+s.w)+" kg"}),
-        el("div",{class:"center b num",text:(s.r||"—")+" reps"}),
-        (!s.warm&&+s.w>0&&+s.w>=pr.w)?el("span",{class:"pill pr",text:"PR"}):el("div")))));
+      ...(en.sets||[]).map((s,i)=> esCardio(getDoc(en.exerciseId))
+        ? el("div",{class:"setgrid",style:"grid-template-columns:28px 1fr 1fr 1fr"},
+            el("div",{class:"idx",text:String(i+1)}),
+            el("div",{class:"center b num",text:fMin(+s.t||0)}),
+            el("div",{class:"center b num",text:(+s.d? fNum(+s.d,2)+" km":"—")}),
+            el("div",{class:"center sm faint num",text:fRitmo(ritmoDe(+s.t||0,+s.d||0))}))
+        : el("div",{class:"setgrid",style:"grid-template-columns:28px 1fr 1fr 44px"},
+            el("div",{class:"idx"+(s.warm?" warm":""),text:s.warm?"C":String((en.sets||[]).slice(0,i+1).filter(x=>!x.warm).length)}),
+            el("div",{class:"center b num",text:fNum(+s.w)+" kg"}),
+            el("div",{class:"center b num",text:(s.r||"—")+" reps"}),
+            (!s.warm&&+s.w>0&&+s.w>=pr.w)?el("span",{class:"pill pr",text:"PR"}):el("div")))));
   }
   v.appendChild(el("div",{style:"margin-top:16px"},
     el("button",{class:"btn full",style:"margin-bottom:9px",onclick:()=>{
@@ -1758,7 +1912,16 @@ function viewProgress(v){
     }
   }
   // récords
-  const exs=allOf("exercise").map(e=>({e,pr:prFor(e.id)})).filter(x=>x.pr.w>0)
+  const cardios=allOf("exercise").filter(e=>esCardio(e)).map(e=>({e,pr:prFor(e.id)}))
+    .filter(x=>x.pr.km>0||x.pr.min>0).sort((a,b)=>b.pr.km-a.pr.km);
+  if(cardios.length){
+    v.appendChild(el("div",{class:"sec-title",text:"Cardio"}));
+    for(const x of cardios) v.appendChild(el("button",{class:"item",onclick:()=>push({v:"exercise",id:x.e.id})},
+      el("div",{class:"grow"},el("div",{class:"b ellip",text:x.e.name}),
+        el("div",{class:"sm faint",text:"mejor ritmo "+fRitmo(x.pr.ritmo)+" · "+fMin(x.pr.min)+" seguidos"})),
+      el("span",{class:"pill pr",text:fNum(x.pr.km,2)+" km"})));
+  }
+  const exs=allOf("exercise").filter(e=>!esCardio(e)).map(e=>({e,pr:prFor(e.id)})).filter(x=>x.pr.w>0)
     .sort((a,b)=>b.pr.o-a.pr.o);
   v.appendChild(el("div",{class:"sec-title",text:"Récords personales"}));
   if(!exs.length) v.appendChild(el("p",{class:"sm faint center",style:"padding:12px",
